@@ -1,0 +1,147 @@
+---
+title: "Regression Table"
+author: "Charles Costanzo"
+date: "2023-07-18"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes:
+- \usepackage[default]{sourcesanspro}
+- \usepackage[T1]{fontenc}
+- \usepackage{caption}
+mainfont: sans
+classoption: landscape
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\pagenumbering{gobble} 
+\captionsetup[table]{size = LARGE, font = bf,
+justification=raggedright, singlelinecheck=false}
+
+# Data Management
+```{r, message = FALSE}
+setwd("/Users/charlescostanzo/College/Su 2023/Chopra/Poster Code/")
+
+library(tidyverse)
+library(readxl)
+library(ez)
+library(MASS) # for negative binomial glm
+library(AER) # for dispersion test
+library(gtsummary) # for regression table
+library(gt)
+
+
+elispot <- read_csv("Data/elispot.csv")
+elispot$sex <- factor(elispot$sex)
+elispot$vaccinated <- factor(elispot$vaccinated)
+elispot$id <- factor(elispot$id)
+
+glm.data <- elispot %>%
+  group_by(id) %>%
+  mutate(avg_spots = round(mean(spots)),1) %>% # take mean of technical replicates and round to nearest integer
+  dplyr::select(id, sex, avg_spots, vaccinated) %>%
+  distinct()
+```
+
+\newpage
+
+# Negative Binomial GLMs
+```{r}
+glm.data <- glm.data %>%
+  mutate(vaccinated = case_when(vaccinated == "1" ~ "Vaccine",
+                                vaccinated == "0" ~ "Control")) %>%
+  rename(Treatment = vaccinated,
+         Sex = sex,
+         `Mean SFUs` = avg_spots)
+# fit full model
+nb.mod.full <- glm.nb(`Mean SFUs` ~ Treatment * Sex,
+                      link = "log",
+                      data = glm.data)
+# summary(nb.mod.full)
+
+# fit main effects model
+nb.mod.main <- glm.nb(`Mean SFUs` ~ Treatment + Sex,
+                      link = "log",
+                      data = glm.data)
+# summary(nb.mod.main)
+
+# fit reduced model
+nb.mod.red <- glm.nb(`Mean SFUs` ~ Treatment,
+                 link = "log",
+                 data = glm.data)
+# summary(nb.mod.red)
+```
+
+\newpage
+
+# Create Regression Table
+
+```{r}
+put_vector_in_parentheses <- function(values){
+    put_value_in_parentheses <- function(value){
+        if(is.na(value)){
+            return(value)
+        }
+        else{
+            return(paste0("[", value, "]"))
+        }
+    }
+    new_values <- sapply(values, put_value_in_parentheses)
+    return(new_values)
+}
+
+mytheme <- list(# round large p-values to two places
+    "pkgwide-fn:pvalue_fun" = function(x) style_pvalue(x, digits = 3, prepend_p = TRUE))
+
+set_gtsummary_theme(mytheme)
+
+full <- tbl_regression(nb.mod.full, exponentiate = TRUE) %>% 
+    modify_table_body(~ .x %>% dplyr::mutate(ci = put_vector_in_parentheses(ci))) %>%
+  add_global_p() %>%
+  bold_p(t = 0.05) %>%
+  bold_labels() %>%
+  add_glance_table(
+    label = list(nobs ~ "Num. Obs.", AIC ~ "AIC"),
+    include = c(nobs, AIC))
+
+main <- tbl_regression(nb.mod.main, exponentiate = TRUE) %>% 
+    modify_table_body(~ .x %>% dplyr::mutate(ci = put_vector_in_parentheses(ci))) %>%
+  add_global_p() %>%
+  bold_p(t = 0.05) %>%
+  bold_labels() %>%
+  add_glance_table(
+    label = list(nobs ~ "Num. Obs.", AIC ~ "AIC"),
+    include = c(nobs, AIC))
+
+reduced <- tbl_regression(nb.mod.red, exponentiate = TRUE) %>% 
+    modify_table_body(~ .x %>% dplyr::mutate(ci = put_vector_in_parentheses(ci))) %>%
+  add_global_p() %>%
+  bold_p(t = 0.05) %>%
+  bold_labels() %>%
+  add_glance_table(
+    label = list(nobs ~ "Num. Obs.", AIC ~ "AIC"),
+    include = c(nobs, AIC))
+```
+
+```{r}
+merge <- tbl_merge(
+    tbls = list(full, main, reduced),
+    tab_spanner = c("**Full Model**", "**Main Effects Model**","**Reduced Model**")
+  ) 
+merge
+```
+
+\newpage
+
+```{r, fig.align = "left"}
+merge %>%
+  as_gt() %>%
+  tab_options(table.align='left')
+```
+
+
+
