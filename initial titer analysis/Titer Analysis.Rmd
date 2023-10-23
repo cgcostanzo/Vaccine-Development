@@ -1,0 +1,400 @@
+---
+title: "Titer Analysis"
+author: "Charles Costanzo"
+date: "June 2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("/Users/charlescostanzo/College/Su 2023/Chopra/African Green Monkeys Plague/")
+
+# load in packages
+library(tidyverse)
+library(readxl)
+library(scales)
+library(rstatix)
+library(reshape)
+library(dplyr)
+library(ggpubr)
+library(plyr)
+library(datarium)
+library(RColorBrewer)
+library(afex)
+library(performance)
+library(see)
+```
+```{r}
+# load in data
+data <- read_excel("Data/primate.xlsx")
+
+# create a new variable "id_treatment_sex" that combines "id",
+# "treatment", and "sex" variables separated by a space
+data2 <- data %>%
+  mutate(id_treatment_sex = unite(data = data, col = "id_treatment_sex", c(id, treatment, sex), sep = " ")$id_treatment_sex)
+
+# "make" time a factor variable with three levels
+data2$time <- factor(data2$time, levels = c("Pre","Prime","Boost"))
+
+# make "id_treatment_sex" a factor variable
+data2$id_treatment_sex <- factor(data2$id_treatment_sex, 
+                                 levels = c("9501 PBS F1 Male",
+                                            "9286 PBS F1 Male",
+                                            "9035 F1 Male",
+                                            "9050 F1 Male",
+                                            "9330 F1 Male",
+                                            "0303 PBS F1 Female",
+                                            "0116 PBS F1 Female",
+                                            "9022 F1 Female",
+                                            "9051 F1 Female",
+                                            "9107 F1 Female",
+                                            "9501 PBS LcrV Male",
+                                            "9286 PBS LcrV Male",
+                                            "9035 LcrV Male",
+                                            "9050 LcrV Male",
+                                            "9330 LcrV Male",
+                                            "0303 PBS LcrV Female",
+                                            "0116 PBS LcrV Female",
+                                            "9022 LcrV Female",
+                                            "9051 LcrV Female",
+                                            "9107 LcrV Female"
+                                 ))
+
+# filter out unvaccinated "control" monkeys (not sure if we can analyze those)
+# convert columns sex, time, and treatment to factor
+data2 <- data2 %>%
+  filter(treatment == "F1" | treatment == "LcrV") %>%
+  mutate(sex = as.factor(sex),
+         time = as.factor(time),
+         treatment = as.factor(treatment))
+
+# create a new variable "log10_titer"
+# that contains titer values on log base 10 scale
+data2$log10_titer <- log(data2$titer, base = 10)
+```
+
+\newpage
+
+```{r}
+################################################################################
+# Summary Statistics
+################################################################################
+
+summary <- data2 %>%
+  group_by(time, sex) %>%
+  get_summary_stats(titer, type = "mean_sd")
+summary
+```
+
+\newpage
+
+```{r}
+################################################################################
+# Data Visualization
+################################################################################
+
+# generate a box-dotplot for titer by dose time
+data2 %>%
+  ggplot(aes(x = time, y = titer, fill = time)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  scale_fill_brewer(palette = "Paired",
+                    name = "Dose") +
+  theme_light() +
+  ylab("Titer") +
+  xlab("Dose") +
+  ggtitle("Titer by Dose Time") +
+  geom_dotplot(binaxis = "y", 
+               stackdir = "center",
+               stackgroups = FALSE,
+               dotsize = 0.5,
+               position = position_dodge())
+
+
+# check for outliers in titer column grouped by dose time
+outlier_titer <- data2 %>%
+  group_by(time) %>%
+  identify_outliers(titer)
+outlier_titer
+
+# check for outliers in log10_titer column grouped by dose time
+outlier_log10_titer <- data2 %>%
+  filter(treatment == "F1") %>%
+  group_by(time) %>%
+  identify_outliers(log10_titer)
+outlier_log10_titer
+```
+
+\newpage
+
+```{r}
+################################################################################
+# Check Assumptions
+################################################################################
+
+#############
+# Normality #
+#############
+
+# check for normality in F1 treatment group, excluding "Pre" dose rows
+# (using Shapiro-Wilks test)
+normality_f1 <- data2 %>%
+  group_by(time) %>%
+  filter(treatment == "F1") %>%
+  filter(time != "Pre") %>%
+  shapiro_test(log10_titer)
+normality_f1
+
+# check for normality in LcrV treatment group, excluding "Pre" dose rows
+normality_lcrv <- data2 %>%
+  group_by(time) %>%
+  filter(treatment == "LcrV") %>%
+  filter(time != "Pre") %>%
+  shapiro_test(log10_titer)
+normality_lcrv
+
+# do we have to check for normality with both treatment (antigen) groups together?
+normality_both <- data2 %>%
+  group_by(time) %>%
+  filter(time != "Pre") %>%
+  shapiro_test(log10_titer)
+normality_both
+
+s1 <- aov_ez("id", "log10_titer", data = filter(data2, treatment == "F1"),
+             between = "sex",
+             within = "time")
+## Warning: More than one observation per design cell, aggregating data using `fun_aggregate = mean`.
+## To turn off this warning, pass `fun_aggregate = mean` explicitly.
+is_norm <- check_normality(s1)
+
+plot(is_norm)
+plot(is_norm, type = "qq")
+
+```
+
+\newpage
+
+```{r}
+##############
+# Sphericity #
+##############
+res_f1 <- anova_test(data = filter(data2, treatment == "F1"),
+                  dv = log10_titer,
+                  wid = id,
+                  between = sex,
+                  within = time) 
+res_f1
+# sphericity is met for F1
+
+res_lcrv <- anova_test(data = filter(data2, treatment == "LcrV"),
+                  dv = log10_titer,
+                  wid = id,
+                  between = sex,
+                  within = time) 
+res_lcrv
+# sphericity is met for LcrV
+```
+
+```{r}
+##############
+# Equal Variance #
+##############
+
+library(afex)
+library(performance) # for assumption checks
+
+o1 <- aov_ez("id", "titer", filter(data2, treatment == "F1"),
+             between = "sex",
+             within = "time")
+
+check_homogeneity(o1)
+```
+
+\newpage
+
+```{r}
+################################################################################
+# ANOVA Testing - F1
+################################################################################
+#
+#
+# Two-Way
+#
+#
+################################################################################
+# Test effect of sex and time on log10_titer
+two.way_f1 <- data2 %>% 
+  filter(treatment == "F1") %>%
+  anova_test(dv = log10_titer, 
+             wid = id, 
+             between = sex,
+             within = time, 
+             detailed = TRUE)
+two.way_f1
+
+# Pairwise comparison between each time point combination within each sex
+pwc_two.way_f1 <- data2 %>%
+  group_by(sex) %>%
+  filter(treatment == "F1") %>%
+  pairwise_t_test(
+    log10_titer ~ time, 
+    paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+pwc_two.way_f1
+```
+
+\newpage
+
+```{r}
+################################################################################
+#
+#
+# One-Way
+#
+#
+################################################################################
+
+# Test effect of time on log10_titer
+one.way_f1 <- data2 %>% 
+  filter(treatment == "F1") %>%
+  anova_test(dv = log10_titer, 
+             wid = id, 
+             within = time, 
+             detailed = TRUE)
+one.way_f1
+
+# Pairwise Comparison Between Time Points
+pwc_one.way_f1 <- data2 %>%
+  filter(treatment == "F1") %>%
+  pairwise_t_test(
+    log10_titer ~ time, 
+    paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+pwc_one.way_f1
+```
+
+\newpage
+
+```{r}
+################################################################################
+# ANOVA Testing - LcrV
+################################################################################
+#
+#
+# Two-Way
+#
+#
+################################################################################
+# Test effect of sex and time on log10_titer
+two.way_lcrv <- data2 %>% 
+  filter(treatment == "LcrV") %>%
+  anova_test(dv = log10_titer, 
+             wid = id, 
+             between = sex,
+             within = time, 
+             detailed = TRUE)
+two.way_lcrv
+
+# Pairwise comparison between each time point combination within each sex
+pwc_two.way_lcrv <- data2 %>%
+  group_by(sex) %>%
+  filter(treatment == "LcrV") %>%
+  pairwise_t_test(
+    log10_titer ~ time, 
+    paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+pwc_two.way_lcrv
+```
+
+\newpage
+
+```{r}
+################################################################################
+#
+#
+# One-Way
+#
+#
+################################################################################
+
+# Test effect of time on log10_titer
+one.way_lcrv <- data2 %>% 
+  filter(treatment == "LcrV") %>%
+  anova_test(dv = log10_titer, 
+             wid = id, 
+             within = time, 
+             detailed = TRUE)
+one.way_lcrv
+
+# Pairwise Comparison Between Time Points
+pwc_one.way_lcrv <- data2 %>%
+  filter(treatment == "LcrV") %>%
+  pairwise_t_test(
+    log10_titer ~ time, 
+    paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+pwc_one.way_lcrv
+
+# Should we use Kruskal-Wallis/Dunn's Test since the "Pre" group is not normal?
+
+library(permuco)
+
+mod <- aovperm(log10_titer ~ time*sex + Error(id/(time)),
+                        data = filter(data2, treatment == "F1"), method = "Rd_kheradPajouh_renaud")
+mod
+
+mod2 <- aovperm(log10_titer ~ time + sex + Error(id/(time)),
+               data = filter(data2, treatment == "F1"), method = "Rd_kheradPajouh_renaud")
+mod2
+
+mod3 <- aovperm(log10_titer ~ time + Error(id/(time)),
+                data = filter(data2, treatment == "F1"), method = "Rd_kheradPajouh_renaud")
+mod3
+
+# Friedman
+res.fried <- data2 %>%
+  filter(treatment == "F1") %>% friedman_test(log10_titer ~ time |id)
+res.fried
+
+# Effect size - overall difference among group
+data2 %>%
+  filter(treatment == "F1") %>% 
+  friedman_effsize(log10_titer ~ time |id)
+
+# pairwise comparisons
+pwc <- data2 %>%
+  filter(treatment == "F1") %>%
+#  filter(time == "Pre" | time == "Prime") %>%
+  wilcox_test(log10_titer ~ time, 
+              paired = TRUE, 
+              p.adjust.method = "bonferroni")
+pwc
+# connect with mean, sd (numeric table)
+# give p-values and adjusted p-values
+
+# for LcrV
+res.fried2 <- data2 %>%
+  filter(treatment == "LcrV") %>% friedman_test(log10_titer ~ time |id)
+res.fried2
+
+# Effect size
+data2 %>%
+  filter(treatment == "LcrV") %>% 
+  friedman_effsize(log10_titer ~ time |id)
+
+# pairwise comparisons
+pwc2 <- data2 %>%
+  filter(treatment == "LcrV") %>%
+  wilcox_test(log10_titer ~ time, 
+              paired = TRUE, 
+              p.adjust.method = "bonferroni")
+pwc2
+```
+
